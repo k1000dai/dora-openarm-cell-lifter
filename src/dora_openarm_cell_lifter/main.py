@@ -131,9 +131,7 @@ def _dora_main(lifter, args):
                 [oa.PosVelParam(q=POS_MIN - 1000.0, dq=VEL_MAX / 5.0)]
             )
 
-            for _ in range(5):
-                lifter.recv_all()
-                time.sleep(0.01)
+            lifter.recv_all(1000)
 
             for motor in lifter.get_arm().get_motors():
                 lifter_pos = motor.get_position()
@@ -236,7 +234,7 @@ def _dora_main(lifter, args):
                 )
 
                 lifter.get_arm().posvel_control_all(
-                    [oa.PosVelParam(q=-pos_max * 2.0, dq=applied_vel)]
+                    [oa.PosVelParam(q=offset_pos, dq=applied_vel)]
                 )
 
         # DOWN operation
@@ -263,7 +261,7 @@ def _dora_main(lifter, args):
                 )
 
                 lifter.get_arm().posvel_control_all(
-                    [oa.PosVelParam(q=pos_max * 2.0, dq=applied_vel)]
+                    [oa.PosVelParam(q=pos_max + offset_pos, dq=applied_vel)]
                 )
 
         # STOP (Within deadzone)
