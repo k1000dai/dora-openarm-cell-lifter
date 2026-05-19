@@ -94,6 +94,8 @@ def _dora_main(lifter, args):
     jammed_direction = None
     hold_pos = 0.0
     is_stopping = False
+    # Last commanded action target; lazily initialized on first normal iteration
+    action_elevation = None
 
     prev_time = time.time()
 
@@ -164,6 +166,11 @@ def _dora_main(lifter, args):
             "elevation_observation", pa.array([obs_elevation], type=pa.float32())
         )
 
+        # On first normal iteration, seed the action target with the current observation.
+        # In subsequent iterations, when there is no movement, keep the previous target.
+        if action_elevation is None:
+            action_elevation = obs_elevation
+
         # Calculate distance to the nearest physical limit (upper 0.0 or lower pos_max)
         distance_to_min = obs_position - 0.0
         distance_to_max = pos_max - obs_position
@@ -185,6 +192,11 @@ def _dora_main(lifter, args):
             is_stopping = False
             lifter.get_arm().posvel_control_all(
                 [oa.PosVelParam(q=target_position, dq=VEL_MAX * speed_factor)]
+            )
+            action_elevation = elevation
+            node.send_output(
+                "elevation_action",
+                pa.array([action_elevation], type=pa.float32()),
             )
             continue
 
@@ -230,10 +242,6 @@ def _dora_main(lifter, args):
                 action_elevation = _calc_next_elevation(
                     obs_elevation, -applied_vel, dt, args.lead_length
                 )
-                node.send_output(
-                    "elevation_action",
-                    pa.array([action_elevation], type=pa.float32()),
-                )
 
                 lifter.get_arm().posvel_control_all(
                     [oa.PosVelParam(q=offset_pos, dq=applied_vel)]
@@ -257,10 +265,6 @@ def _dora_main(lifter, args):
                 action_elevation = _calc_next_elevation(
                     obs_elevation, applied_vel, dt, args.lead_length
                 )
-                node.send_output(
-                    "elevation_action",
-                    pa.array([action_elevation], type=pa.float32()),
-                )
 
                 lifter.get_arm().posvel_control_all(
                     [oa.PosVelParam(q=pos_max + offset_pos, dq=applied_vel)]
@@ -276,6 +280,10 @@ def _dora_main(lifter, args):
             # Hold silently at the memorized position (unaffected by sensor noise)
             lifter.get_arm().posvel_control_all([oa.PosVelParam(q=hold_pos, dq=0.0)])
 
+        node.send_output(
+            "elevation_action", pa.array([action_elevation], type=pa.float32())
+        )
+
 
 def main():
     """Control the OpenArm Lifter using joystick inputs.
@@ -286,7 +294,8 @@ def main():
     action:
     Estimated next elevation (mm), calculated from observation and `applied_vel`.
     `applied_vel` is reduced linearly near the stroke limits (within `SLOW_MARGIN`) to avoid collision.
-    `action` is only output when the joystick is operated.
+    `action` is emitted every loop in normal operation; when there is no movement
+    (joystick deadzone or jammed), the previous target value is held.
     """
     parser = argparse.ArgumentParser(description="Control the OpenArm Lifter")
     parser.add_argument(
