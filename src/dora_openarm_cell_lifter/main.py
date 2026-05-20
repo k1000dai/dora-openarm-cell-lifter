@@ -26,6 +26,7 @@ import pyarrow as pa
 # --- Constants ---
 VEL_MAX = 30.0
 POS_MIN = 0.0
+HOLD_POS_VEL = 1.0
 
 # Threshold for joystick deadzone
 JOYSTICK_DEADZONE = 0.15
@@ -296,8 +297,10 @@ def _dora_main(lifter, args):
                 "elevation_action",
                 pa.array([hold_elevation], type=pa.float32()),
             )
-            # Hold silently at the memorized position (unaffected by sensor noise)
-            lifter.get_arm().posvel_control_all([oa.PosVelParam(q=hold_pos, dq=0.0)])
+            # Hold position with a small velocity to maintain stiffness, preventing drift due to gravity or disturbances
+            lifter.get_arm().posvel_control_all(
+                [oa.PosVelParam(q=hold_pos, dq=HOLD_POS_VEL)]
+            )
 
 
 def main():
