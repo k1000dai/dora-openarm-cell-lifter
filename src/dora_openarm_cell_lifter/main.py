@@ -66,8 +66,9 @@ class PositionUnwrapper:
         return self._continuous_pos
 
 
-def _calc_next_elevation(current_elevation, velocity, dt, lead_length):
-    return current_elevation + velocity * dt * lead_length / (2.0 * math.pi)
+def _calc_next_elevation(current_elevation, velocity, dt, lead_length, screw_length):
+    next_elevation = current_elevation + velocity * dt * lead_length / (2.0 * math.pi)
+    return max(0.0, min(next_elevation, screw_length))  # Clamp to physical limits
 
 
 def _dora_main(lifter, args):
@@ -93,6 +94,7 @@ def _dora_main(lifter, args):
     # State management variables
     jammed_direction = None
     hold_pos = 0.0
+    hold_elevation = 0.0
     is_stopping = False
 
     prev_time = time.time()
@@ -181,6 +183,12 @@ def _dora_main(lifter, args):
             elevation = max(0.0, min(args.screw_length, value[0].as_py()))
             target_position = elevation / args.lead_length * 2.0 * math.pi + offset_pos
             is_stopping = False
+
+            node.send_output(
+                "elevation_action",
+                pa.array([elevation], type=pa.float32()),
+            )
+
             lifter.get_arm().posvel_control_all(
                 [oa.PosVelParam(q=target_position, dq=VEL_MAX * speed_factor)]
             )
@@ -191,6 +199,9 @@ def _dora_main(lifter, args):
             if jammed_direction is None:
                 # Memorize the exact position at impact to prevent hunting
                 hold_pos = lifter_pos
+                hold_elevation = (
+                    (hold_pos - offset_pos) / (2.0 * math.pi) * args.lead_length
+                )
 
                 if joystick_y > JOYSTICK_DEADZONE:
                     jammed_direction = "UP"
@@ -215,9 +226,14 @@ def _dora_main(lifter, args):
             is_stopping = False
             if jammed_direction in ["UP", "UNKNOWN"]:
                 # Hold silently at the memorized position while jammed in the UP direction
+                node.send_output(
+                    "elevation_action",
+                    pa.array([hold_elevation], type=pa.float32()),
+                )
                 lifter.get_arm().posvel_control_all(
                     [oa.PosVelParam(q=hold_pos, dq=0.0)]
                 )
+
             else:
                 applied_vel = VEL_MAX * (
                     abs(joystick_y - JOYSTICK_DEADZONE) / JOYSTICK_RANGE
@@ -226,15 +242,20 @@ def _dora_main(lifter, args):
 
                 # action: elevation(mm)
                 action_elevation = _calc_next_elevation(
-                    obs_elevation, -applied_vel, dt, args.lead_length
+                    obs_elevation, -applied_vel, dt, args.lead_length, args.screw_length
                 )
+
+                target_position = (
+                    action_elevation / args.lead_length * 2.0 * math.pi + offset_pos
+                )
+
                 node.send_output(
                     "elevation_action",
                     pa.array([action_elevation], type=pa.float32()),
                 )
 
                 lifter.get_arm().posvel_control_all(
-                    [oa.PosVelParam(q=offset_pos, dq=applied_vel)]
+                    [oa.PosVelParam(q=target_position, dq=applied_vel)]
                 )
 
         # DOWN operation
@@ -242,6 +263,11 @@ def _dora_main(lifter, args):
             is_stopping = False
             if jammed_direction in ["DOWN", "UNKNOWN"]:
                 # Hold silently at the memorized position while jammed in the DOWN direction
+
+                node.send_output(
+                    "elevation_action",
+                    pa.array([hold_elevation], type=pa.float32()),
+                )
                 lifter.get_arm().posvel_control_all(
                     [oa.PosVelParam(q=hold_pos, dq=0.0)]
                 )
@@ -253,15 +279,20 @@ def _dora_main(lifter, args):
 
                 # action: elevation(mm)
                 action_elevation = _calc_next_elevation(
-                    obs_elevation, applied_vel, dt, args.lead_length
+                    obs_elevation, applied_vel, dt, args.lead_length, args.screw_length
                 )
+
+                target_position = (
+                    action_elevation / args.lead_length * 2.0 * math.pi + offset_pos
+                )
+
                 node.send_output(
                     "elevation_action",
                     pa.array([action_elevation], type=pa.float32()),
                 )
 
                 lifter.get_arm().posvel_control_all(
-                    [oa.PosVelParam(q=pos_max + offset_pos, dq=applied_vel)]
+                    [oa.PosVelParam(q=target_position, dq=applied_vel)]
                 )
 
         # STOP (Within deadzone)
@@ -269,8 +300,15 @@ def _dora_main(lifter, args):
             if not is_stopping:
                 # Memorize the exact position at the moment the joystick is released
                 hold_pos = lifter_pos
+                hold_elevation = (
+                    (hold_pos - offset_pos) / (2.0 * math.pi) * args.lead_length
+                )
                 is_stopping = True
 
+            node.send_output(
+                "elevation_action",
+                pa.array([hold_elevation], type=pa.float32()),
+            )
             # Hold silently at the memorized position (unaffected by sensor noise)
             lifter.get_arm().posvel_control_all([oa.PosVelParam(q=hold_pos, dq=0.0)])
 
